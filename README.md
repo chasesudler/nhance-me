@@ -1,40 +1,26 @@
 # Nhance Me
 
-Nhance Me is a Vercel-ready Next.js + PWA starter for a real-estate AI image enhancement platform. It includes email/password dashboard access, drag-and-drop uploads, 50-image batch processing UI, downloadable enhanced outputs, virtual staging workflow screens, logo options, and API-ready enhancement/staging endpoints.
+A Vercel-ready Next.js + PWA foundation for real estate photo enhancement, 50-image batch workflows, image integrity controls, and virtual staging.
 
-## Important MVP note
-This zip includes a deployable product shell and browser-side enhancement preview engine. True Autoenhance-level HDR merge, window pulls, object-safe AI editing, and production virtual staging require a dedicated image AI provider or proprietary model pipeline. The included `/app/api/enhance` and `/app/api/stage` routes are structured for that integration.
+## Selected brand direction
 
-## Deploy to Vercel
-1. Upload the contents of this zip as the project root. The `package.json` file must be at the root level in Vercel.
-2. Vercel will run `npm install` and `npm run build`.
-3. Deploy.
+Logo direction selected: triangle house inside the Morgan Blue rounded square with Morgan Orange accent window/arc.
 
-## Optional production environment variables
+Included brand files:
+
+- `/public/nhance-me-logo.svg`
+- `/public/nhance-me-logo.png`
+- `/public/nhance-me-icon.svg`
+- `/public/nhance-me-icon-512.png`
+- PWA icons in `/public/icons/`
+
+## Deploy
+
+Install dependencies and run locally:
+
+```bash
+npm install
+npm run dev
 ```
-AI_ENHANCE_API_URL=
-AI_ENHANCE_API_KEY=
-AI_STAGING_API_URL=
-AI_STAGING_API_KEY=
-NEXT_PUBLIC_APP_URL=https://your-domain.com
-```
 
-## Included features
-- Landing page with premium real-estate SaaS positioning
-- Email/password login and create-account flow using local demo auth
-- Protected dashboard routes
-- Drag/drop and upload button image upload
-- Up to 50 images per batch
-- Client-side enhancement preview engine for speed and low latency
-- Batch ZIP download
-- Enhancement controls: Exposure, color, clarity, vertical correction, sky-safe mode, window pull mode, no-hallucination integrity mode
-- Virtual staging UI for room type/style/furniture density
-- PWA manifest and service worker
-- Two logo options in SVG and PNG
-
-## Production recommendations
-For a commercial launch, replace demo local auth with Firebase Auth, Supabase Auth, Clerk, or Auth.js. Replace browser-side enhancement with a queue-based image pipeline using Cloudflare R2/Vercel Blob/S3 + Replicate/Stability/RunPod/custom models + webhooks.
-
-
-## Deployment fix note
-This package is zipped with `package.json` at the root. If Vercel receives a zip containing an extra parent folder above `package.json`, it may deploy a blank/404 project.
+Deploy to Vercel by pushing this repo to GitHub and importing it as a Next.js project.

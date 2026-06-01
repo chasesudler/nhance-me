@@ -5,6 +5,7 @@ export const metadata = {
   description: 'Fast, consistent real estate image enhancement and virtual staging.',
   manifest: '/manifest.json',
   themeColor: '#1B4383',
+  icons: { icon: '/icons/icon-192.png', apple: '/icons/icon-192.png' },
   appleWebApp: { capable: true, statusBarStyle: 'default', title: 'Nhance Me' }
 };
 

@@ -1,7 +1,0 @@
-'use client';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import Logo from '@/components/Logo';
-import { signIn } from '@/lib/auth';
-export default function Login(){const [email,setEmail]=useState('demo@nhanceme.app');const [password,setPassword]=useState('password123');const [mode,setMode]=useState('login');const router=useRouter();function submit(e){e.preventDefault();signIn(email,password);router.push('/dashboard')}return <div className="auth-page"><form className="auth-card" onSubmit={submit}><Logo/><h1>{mode==='login'?'Welcome back':'Create your Nhance Me account'}</h1><p className="small">Use the demo credentials or enter any email/password to access the deployable demo dashboard.</p><div className="field"><label>Email</label><input type="email" required value={email} onChange={e=>setEmail(e.target.value)} /></div><div className="field"><label>Password</label><input type="password" required minLength={6} value={password} onChange={e=>setPassword(e.target.value)} /></div><button className="btn btn-primary" style={{width:'100%'}}>{mode==='login'?'Log in':'Create account'}</button><p className="small" style={{textAlign:'center'}}>{mode==='login'?'Need an account?':'Already have an account?'} <button type="button" onClick={()=>setMode(mode==='login'?'signup':'login')} style={{border:0,background:'transparent',color:'#1B4383',fontWeight:900}}>{mode==='login'?'Create one':'Log in'}</button></p><p className="small"><Link href="/">← Back to home</Link></p></form></div>}

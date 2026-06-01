@@ -1,1 +1,5 @@
-export default function Logo({variant='mark',light=false}){return <div className="brand"><img src="/logos/nhance-logo-option-1.svg" alt="Nhance Me logo"/><span style={{color:light?'white':'inherit'}}>Nhance Me</span></div>}
+export default function Logo({light=false}){
+  return <div className="brand">
+    <img className="brand-logo" src="/nhance-me-logo.svg" alt="Nhance Me" />
+  </div>
+}
