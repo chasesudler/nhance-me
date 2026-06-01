@@ -1,0 +1,13 @@
+<svg width="640" height="220" viewBox="0 0 640 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="640" height="220" rx="36" fill="white"/>
+<g transform="translate(52 42)">
+<rect x="0" y="19" width="140" height="112" rx="25" fill="#1B4383"/>
+<path d="M24 74L70 35L116 74" stroke="#F47937" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M38 72V111H103V72" fill="white" opacity=".96"/>
+<rect x="57" y="82" width="26" height="29" rx="4" fill="#1B4383"/>
+<path d="M113 18L126 37L149 43L128 54L121 78L108 58L86 52L107 41L113 18Z" fill="#F47937" stroke="white" stroke-width="4"/>
+</g>
+<text x="210" y="96" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="900" fill="#1B4383" letter-spacing="-2">Nhance Me</text>
+<text x="214" y="134" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800" fill="#F47937" letter-spacing="2.4">ENHANCED LISTING PHOTOS</text>
+<path d="M214 152H548" stroke="#DCE5F2" stroke-width="3" stroke-linecap="round"/>
+</svg>

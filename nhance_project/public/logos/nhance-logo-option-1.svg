@@ -1,0 +1,13 @@
+<svg width="640" height="220" viewBox="0 0 640 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="640" height="220" rx="36" fill="white"/>
+<g transform="translate(52 38)">
+<circle cx="72" cy="72" r="67" fill="#1B4383"/>
+<circle cx="72" cy="72" r="44" fill="white" opacity=".96"/>
+<circle cx="72" cy="72" r="23" fill="#1B4383"/>
+<path d="M82 6L51 79H73L61 138L105 58H81L82 6Z" fill="#F47937" stroke="white" stroke-width="5" stroke-linejoin="round"/>
+<path d="M25 121C45 145 96 153 123 118" stroke="#F47937" stroke-width="9" stroke-linecap="round"/>
+</g>
+<text x="210" y="96" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="900" fill="#1B4383" letter-spacing="-2">Nhance Me</text>
+<text x="214" y="134" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800" fill="#F47937" letter-spacing="2.4">REAL ESTATE IMAGE AI</text>
+<path d="M214 152H520" stroke="#DCE5F2" stroke-width="3" stroke-linecap="round"/>
+</svg>
