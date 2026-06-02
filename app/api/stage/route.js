@@ -1,7 +1,10 @@
 export const runtime = 'nodejs';
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
-const REPLICATE_MODEL = process.env.REPLICATE_STAGE_MODEL || 'black-forest-labs/flux-kontext-pro';
+const RAW_REPLICATE_STAGE_MODEL = process.env.REPLICATE_STAGE_MODEL || 'black-forest-labs/flux-kontext-pro';
+const REPLICATE_MODEL = RAW_REPLICATE_STAGE_MODEL === 'proplabs/virtual-staging'
+  ? 'black-forest-labs/flux-kontext-pro'
+  : RAW_REPLICATE_STAGE_MODEL;
 
 function normalizeRoom(room = '') {
   const value = room.toLowerCase();
@@ -42,7 +45,7 @@ function friendlyReplicateError(message = '') {
   const raw = String(message || '');
   const text = raw.toLowerCase();
   if (text.includes('requested resource could not be found') || text.includes('404') || text.includes('not found')) {
-    return `Staging model was not found: ${REPLICATE_MODEL}. In Vercel, set REPLICATE_STAGE_MODEL=black-forest-labs/flux-kontext-pro, then redeploy.`;
+    return `Staging model was not found: ${REPLICATE_MODEL}. Check REPLICATE_STAGE_MODEL in Vercel, then redeploy.`;
   }
   if (text.includes('insufficient credit') || text.includes('purchase credit') || text.includes('billing')) {
     return 'AI staging credit is needed. Add Replicate billing credit, wait a few minutes, then try staging again.';
@@ -147,7 +150,8 @@ export async function POST(request) {
         {
           error: friendlyReplicateError(current.error || `Virtual staging did not complete. Current status: ${current.status}`),
           status: current.status,
-          model: REPLICATE_MODEL
+          model: REPLICATE_MODEL,
+          configuredModel: RAW_REPLICATE_STAGE_MODEL
         },
         { status: 500 }
       );
@@ -155,11 +159,11 @@ export async function POST(request) {
 
     const stagedUrl = extractImageUrl(current.output);
     if (!stagedUrl) {
-      return Response.json({ error: 'The staging model completed but did not return an image URL.', model: REPLICATE_MODEL }, { status: 500 });
+      return Response.json({ error: 'The staging model completed but did not return an image URL.', model: REPLICATE_MODEL, configuredModel: RAW_REPLICATE_STAGE_MODEL }, { status: 500 });
     }
 
-    return Response.json({ stagedUrl, output: current.output, status: current.status, model: REPLICATE_MODEL });
+    return Response.json({ stagedUrl, output: current.output, status: current.status, model: REPLICATE_MODEL, configuredModel: RAW_REPLICATE_STAGE_MODEL });
   } catch (error) {
-    return Response.json({ error: friendlyReplicateError(error.message), model: REPLICATE_MODEL }, { status: 500 });
+    return Response.json({ error: friendlyReplicateError(error.message), model: REPLICATE_MODEL, configuredModel: RAW_REPLICATE_STAGE_MODEL }, { status: 500 });
   }
 }
