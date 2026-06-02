@@ -1,7 +1,7 @@
 export const runtime = 'nodejs';
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
-const REPLICATE_MODEL = process.env.REPLICATE_STAGE_MODEL || 'proplabs/virtual-staging';
+const REPLICATE_MODEL = process.env.REPLICATE_STAGE_MODEL || 'black-forest-labs/flux-kontext-pro';
 
 function normalizeRoom(room = '') {
   const value = room.toLowerCase();
@@ -18,10 +18,10 @@ function normalizeRoom(room = '') {
 function normalizeStyle(style = '') {
   const value = style.toLowerCase();
   if (value.includes('luxury')) return 'transitional luxury';
-  if (value.includes('urban')) return 'urban industrial';
-  if (value.includes('minimal')) return 'modern organic';
-  if (value.includes('family')) return 'transitional';
-  return value || 'modern';
+  if (value.includes('urban')) return 'urban contemporary';
+  if (value.includes('minimal')) return 'modern organic minimalist';
+  if (value.includes('family')) return 'family friendly transitional';
+  return value || 'modern warm';
 }
 
 function extractImageUrl(output) {
@@ -38,6 +38,21 @@ function extractImageUrl(output) {
   return null;
 }
 
+function friendlyReplicateError(message = '') {
+  const raw = String(message || '');
+  const text = raw.toLowerCase();
+  if (text.includes('requested resource could not be found') || text.includes('404') || text.includes('not found')) {
+    return `Staging model was not found: ${REPLICATE_MODEL}. In Vercel, set REPLICATE_STAGE_MODEL=black-forest-labs/flux-kontext-pro, then redeploy.`;
+  }
+  if (text.includes('insufficient credit') || text.includes('purchase credit') || text.includes('billing')) {
+    return 'AI staging credit is needed. Add Replicate billing credit, wait a few minutes, then try staging again.';
+  }
+  if (text.includes('unauthorized') || text.includes('api token') || text.includes('authentication')) {
+    return 'AI staging is not authorized yet. Check REPLICATE_API_TOKEN in Vercel Environment Variables, then redeploy.';
+  }
+  return raw || 'Virtual staging failed. Check the staging model and Replicate billing settings.';
+}
+
 async function callReplicate(path, options = {}) {
   const response = await fetch(`https://api.replicate.com/v1${path}`, {
     ...options,
@@ -51,9 +66,46 @@ async function callReplicate(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.detail || data?.error || `Replicate request failed with ${response.status}`;
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
+    throw new Error(friendlyReplicateError(typeof message === 'string' ? message : JSON.stringify(message)));
   }
   return data;
+}
+
+function buildPrompt({ room, style, density, notes }) {
+  return [
+    `Virtually stage this empty ${normalizeRoom(room)} for a premium real estate listing.`,
+    `Interior design style: ${normalizeStyle(style)}.`,
+    `Furniture density: ${(density || 'balanced').toLowerCase()}.`,
+    'Add realistic luxury furniture, tasteful decor, area rug, lighting, and accents that match the room perspective.',
+    'Preserve the exact original architecture: walls, windows, doors, flooring, ceiling, stairs, trim, outlets, room shape, camera angle, and lighting direction.',
+    'Do not alter permanent property features. Do not hide damage. Do not add text, people, logos, or watermarks.',
+    'Make the final result look like a professional MLS listing photo.',
+    notes ? `Client notes: ${notes}` : ''
+  ].filter(Boolean).join(' ');
+}
+
+function buildModelInput(image, body) {
+  const model = REPLICATE_MODEL.toLowerCase();
+  const prompt = buildPrompt(body);
+
+  if (model.includes('flux-kontext') || model.includes('flux-2')) {
+    return {
+      input_image: image,
+      prompt,
+      output_format: 'jpg',
+      safety_tolerance: 2,
+      prompt_upsampling: true
+    };
+  }
+
+  return {
+    image,
+    input_image: image,
+    room_type: normalizeRoom(body.room),
+    design_style: normalizeStyle(body.style),
+    style: normalizeStyle(body.style),
+    prompt
+  };
 }
 
 export async function POST(request) {
@@ -68,31 +120,16 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { image, room, style, density, notes } = body;
+    const { image } = body;
 
     if (!image) {
       return Response.json({ error: 'No room image was provided.' }, { status: 400 });
     }
 
-    const prompt = [
-      `Virtually stage this empty ${normalizeRoom(room)} for a real estate listing.`,
-      `Interior style: ${normalizeStyle(style)}.`,
-      `Furniture density: ${(density || 'balanced').toLowerCase()}.`,
-      'Keep the original walls, windows, doors, flooring, ceiling, room layout, perspective, fixed features, lighting direction, and architectural structure intact.',
-      'Add realistic listing-quality furniture and decor only. Do not alter permanent property features.',
-      notes ? `Client notes: ${notes}` : ''
-    ].filter(Boolean).join(' ');
-
     const prediction = await callReplicate(`/models/${REPLICATE_MODEL}/predictions`, {
       method: 'POST',
       body: JSON.stringify({
-        input: {
-          image,
-          room_type: normalizeRoom(room),
-          design_style: normalizeStyle(style),
-          style: normalizeStyle(style),
-          prompt
-        }
+        input: buildModelInput(image, body)
       })
     });
 
@@ -108,8 +145,9 @@ export async function POST(request) {
     if (current.status !== 'succeeded') {
       return Response.json(
         {
-          error: current.error || `Virtual staging did not complete. Current status: ${current.status}`,
-          status: current.status
+          error: friendlyReplicateError(current.error || `Virtual staging did not complete. Current status: ${current.status}`),
+          status: current.status,
+          model: REPLICATE_MODEL
         },
         { status: 500 }
       );
@@ -117,11 +155,11 @@ export async function POST(request) {
 
     const stagedUrl = extractImageUrl(current.output);
     if (!stagedUrl) {
-      return Response.json({ error: 'The staging model completed but did not return an image URL.' }, { status: 500 });
+      return Response.json({ error: 'The staging model completed but did not return an image URL.', model: REPLICATE_MODEL }, { status: 500 });
     }
 
-    return Response.json({ stagedUrl, output: current.output, status: current.status });
+    return Response.json({ stagedUrl, output: current.output, status: current.status, model: REPLICATE_MODEL });
   } catch (error) {
-    return Response.json({ error: error.message || 'Virtual staging failed.' }, { status: 500 });
+    return Response.json({ error: friendlyReplicateError(error.message), model: REPLICATE_MODEL }, { status: 500 });
   }
 }
