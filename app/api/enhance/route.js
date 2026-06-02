@@ -17,6 +17,17 @@ function extractImageUrl(output) {
   return null;
 }
 
+function friendlyReplicateError(message = '') {
+  const text = String(message || '').toLowerCase();
+  if (text.includes('insufficient credit') || text.includes('purchase credit') || text.includes('billing')) {
+    return 'AI enhancement credit is needed. Local preview was applied. Add Replicate billing credit, wait a few minutes, then run the batch again.';
+  }
+  if (text.includes('unauthorized') || text.includes('api token') || text.includes('authentication')) {
+    return 'AI enhancement is not authorized yet. Check REPLICATE_API_TOKEN in Vercel Environment Variables, then redeploy.';
+  }
+  return 'AI enhancement is temporarily unavailable. Local preview was applied. Try again after checking the AI integration.';
+}
+
 async function callReplicate(path, options = {}) {
   const response = await fetch(`https://api.replicate.com/v1${path}`, {
     ...options,
@@ -30,7 +41,7 @@ async function callReplicate(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.detail || data?.error || `Replicate request failed with ${response.status}`;
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
+    throw new Error(friendlyReplicateError(typeof message === 'string' ? message : JSON.stringify(message)));
   }
   return data;
 }
@@ -101,7 +112,7 @@ export async function POST(request) {
     if (current.status !== 'succeeded') {
       return Response.json(
         {
-          error: current.error || `Enhancement did not complete. Current status: ${current.status}`,
+          error: friendlyReplicateError(current.error || `Enhancement did not complete. Current status: ${current.status}`),
           status: current.status
         },
         { status: 500 }
@@ -122,6 +133,6 @@ export async function POST(request) {
       status: current.status
     });
   } catch (error) {
-    return Response.json({ error: error.message || 'AI enhancement failed.' }, { status: 500 });
+    return Response.json({ error: error.message || 'AI enhancement is temporarily unavailable. Local preview was applied.' }, { status: 500 });
   }
 }
