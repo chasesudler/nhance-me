@@ -1,4 +1,5 @@
 import './globals.css';
+import './mobile.css';
 
 export const metadata = {
   title: 'Nhance Me | AI Real Estate Photo Enhancement',
