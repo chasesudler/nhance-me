@@ -1,6 +1,15 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
+  "installCommand": "npm ci --no-audit --no-fund",
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "functions": {
+    "app/api/enhance/route.js": {
+      "maxDuration": 60
+    },
+    "app/api/stage/route.js": {
+      "maxDuration": 60
+    }
+  }
 }
