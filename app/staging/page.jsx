@@ -4,12 +4,37 @@ import AppShell from '@/components/AppShell';
 import { useRef, useState } from 'react';
 import { Download, Sofa, UploadCloud, WandSparkles } from 'lucide-react';
 
-function read(file) {
-  return new Promise((resolve) => {
+function compressRoomPhoto(file, maxSize = 1400, quality = 0.78) {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not read the selected image.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not load the selected image.'));
+      img.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
     reader.readAsDataURL(file);
   });
+}
+
+async function safeJson(response) {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { error: text || 'The server returned an unreadable response.' };
+  }
 }
 
 export default function Staging() {
@@ -23,11 +48,17 @@ export default function Staging() {
 
   async function pick(e) {
     const file = e.target.files?.[0];
-    if (file) {
-      setImg(await read(file));
+    if (!file) return;
+
+    try {
+      setStatus('Optimizing room photo for staging...');
+      setImg(await compressRoomPhoto(file));
       setResult(null);
       setError('');
       setStatus('Ready to stage');
+    } catch (err) {
+      setError(err.message || 'Image upload failed. Try a JPG under 10MB.');
+      setStatus('Upload needs attention');
     }
   }
 
@@ -36,7 +67,7 @@ export default function Staging() {
     setLoading(true);
     setError('');
     setResult(null);
-    setStatus('Generating real virtual staging...');
+    setStatus('Generating real virtual staging. This can take up to one minute...');
 
     try {
       const response = await fetch('/api/stage', {
@@ -45,13 +76,17 @@ export default function Staging() {
         body: JSON.stringify({ image: img, ...job })
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Virtual staging failed.');
+      const data = await safeJson(response);
+      if (!response.ok) throw new Error(data.error || `Virtual staging failed with status ${response.status}.`);
+      if (!data.stagedUrl) throw new Error('The staging engine completed but did not return an image.');
 
       setResult(data.stagedUrl);
-      setStatus('Staging complete');
+      setStatus(`Staging complete${data.model ? ` (${data.model})` : ''}`);
     } catch (err) {
-      setError(err.message || 'Virtual staging failed.');
+      const message = err.message === 'Load failed'
+        ? 'The staging request failed before the server could respond. This usually means the photo was too large, the function timed out, or the staging model/billing needs attention. Try again with this optimized upload, then check Vercel Function logs if it repeats.'
+        : err.message || 'Virtual staging failed.';
+      setError(message);
       setStatus('Staging engine needs attention');
     } finally {
       setLoading(false);
@@ -63,7 +98,7 @@ export default function Staging() {
       <div className="topbar">
         <div>
           <h1>Virtual Staging</h1>
-          <p className="small">Generate real staged room images through the production staging API. Enhancement stays separate from staging so users know when a photo is being materially transformed.</p>
+          <p className="small">Generate real staged room images through the production staging API. The app now optimizes mobile uploads before sending them to reduce timeout and payload failures.</p>
         </div>
       </div>
 
@@ -72,7 +107,7 @@ export default function Staging() {
           <div className="upload-zone" onClick={() => input.current.click()}>
             <UploadCloud size={38} />
             <h2>Upload empty room photo</h2>
-            <p className="small">Click to upload a room image for real virtual staging.</p>
+            <p className="small">Click to upload a room image for real virtual staging. Large phone photos are compressed before staging.</p>
             <input ref={input} hidden accept="image/*" type="file" onChange={pick} />
           </div>
 
