@@ -124,8 +124,8 @@ export async function POST(request) {
 
     const notes = typeof body.notes === 'string' ? body.notes.slice(0, MAX_NOTES_LENGTH) : '';
 
-    // Replicate file inputs need a public https:// URL, so the incoming
-    // data URI is hosted on Vercel Blob first.
+    // Replicate file inputs need a fetchable https:// URL, so the incoming
+    // data URI is hosted on Vercel Blob first (private upload + presigned URL).
     let imageUrl;
     try {
       imageUrl = await uploadImageToBlob(image, uniqueImageName('nhance-stage'));
