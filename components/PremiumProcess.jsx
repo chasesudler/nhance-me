@@ -333,7 +333,6 @@ export default function PremiumProcess() {
             hidden
             multiple
             accept="image/*"
-            capture="environment"
             type="file"
             onChange={(e) => { addFiles(e.target.files); resetInput(e.target); }}
           />
