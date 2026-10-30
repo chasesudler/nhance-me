@@ -3,6 +3,7 @@
 import AppShell from '@/components/AppShell';
 import { useRef, useState } from 'react';
 import { Download, Sofa, UploadCloud, WandSparkles } from 'lucide-react';
+import { API_BASE } from '@/lib/apiBase';
 
 function compressRoomPhoto(file, maxSize = 1400, quality = 0.78) {
   return new Promise((resolve, reject) => {
@@ -12,15 +13,19 @@ function compressRoomPhoto(file, maxSize = 1400, quality = 0.78) {
       const img = new Image();
       img.onerror = () => reject(new Error('Could not load the selected image.'));
       img.onload = () => {
-        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        try {
+          const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          reject(new Error('Could not process the selected image.'));
+        }
       };
       img.src = reader.result;
     };
@@ -37,6 +42,10 @@ async function safeJson(response) {
   }
 }
 
+function isNetworkError(message = '') {
+  return /failed to fetch|load failed|networkerror|network error/i.test(message);
+}
+
 export default function Staging() {
   const [img, setImg] = useState(null);
   const [result, setResult] = useState(null);
@@ -48,6 +57,7 @@ export default function Staging() {
 
   async function pick(e) {
     const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
     if (!file) return;
 
     try {
@@ -70,10 +80,10 @@ export default function Staging() {
     setStatus('Generating real virtual staging. This can take up to one minute...');
 
     try {
-      const response = await fetch('/api/stage', {
+      const response = await fetch(`${API_BASE}/api/stage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: img, ...job })
+        body: JSON.stringify({ image: img, ...job }),
       });
 
       const data = await safeJson(response);
@@ -83,13 +93,34 @@ export default function Staging() {
       setResult(data.stagedUrl);
       setStatus(`Staging complete${data.model ? ` (${data.model})` : ''}`);
     } catch (err) {
-      const message = err.message === 'Load failed'
+      const message = isNetworkError(err.message)
         ? 'The staging request failed before the server could respond. This usually means the photo was too large, the function timed out, or the staging model/billing needs attention. Try again with this optimized upload, then check Vercel Function logs if it repeats.'
         : err.message || 'Virtual staging failed.';
       setError(message);
       setStatus('Staging engine needs attention');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function downloadStaged() {
+    if (!result) return;
+    try {
+      const res = await fetch(result);
+      if (!res.ok) throw new Error('download failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'nhance-me-staged-room.jpg';
+      document.body.appendChild(a); // required for Safari
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch {
+      // The `download` attribute is ignored cross-origin, so if the direct
+      // fetch fails, open the image where the user can save it manually.
+      window.open(result, '_blank', 'noopener');
     }
   }
 
@@ -108,7 +139,7 @@ export default function Staging() {
             <UploadCloud size={38} />
             <h2>Upload empty room photo</h2>
             <p className="small">Click to upload a room image for real virtual staging. Large phone photos are compressed before staging.</p>
-            <input ref={input} hidden accept="image/*" type="file" onChange={pick} />
+            <input ref={input} hidden accept="image/*" capture="environment" type="file" onChange={pick} />
           </div>
 
           {img && (
@@ -162,7 +193,7 @@ export default function Staging() {
             <WandSparkles size={17} /> {loading ? 'Generating...' : 'Generate staging'}
           </button>
 
-          {result && <a className="btn btn-secondary" href={result} download style={{ width: '100%', marginTop: 10 }}><Download size={17} /> Download staged photo</a>}
+          {result && <button onClick={downloadStaged} className="btn btn-secondary" style={{ width: '100%', marginTop: 10 }}><Download size={17} /> Download staged photo</button>}
         </div>
       </div>
     </AppShell>
