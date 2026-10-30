@@ -139,7 +139,7 @@ export default function Staging() {
             <UploadCloud size={38} />
             <h2>Upload empty room photo</h2>
             <p className="small">Click to upload a room image for real virtual staging. Large phone photos are compressed before staging.</p>
-            <input ref={input} hidden accept="image/*" capture="environment" type="file" onChange={pick} />
+            <input ref={input} hidden accept="image/*" type="file" onChange={pick} />
           </div>
 
           {img && (
