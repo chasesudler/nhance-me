@@ -30,8 +30,14 @@ export default function Settings() {
           <h2>Environment variables</h2>
           <pre style={{whiteSpace:'pre-wrap',background:'#071326',color:'#dbeafe',padding:18,borderRadius:16}}>{`REPLICATE_API_TOKEN=
 REPLICATE_ENHANCE_MODEL=nightmareai/real-esrgan
-REPLICATE_STAGE_MODEL=proplabs/virtual-staging
-NEXT_PUBLIC_APP_URL=`}</pre>
+REPLICATE_STAGE_MODEL=black-forest-labs/flux-kontext-pro
+BLOB_READ_WRITE_TOKEN=
+NHANCE_API_SECRET=`}</pre>
+          <p className="small" style={{marginTop:12}}>
+            <code>BLOB_READ_WRITE_TOKEN</code> (Vercel Blob) hosts uploads so the AI models receive public image URLs.{' '}
+            <code>NHANCE_API_SECRET</code> signs login sessions — set a long random value in production. Mobile builds also use{' '}
+            <code>NEXT_PUBLIC_API_BASE</code> to point the app at this deployment.
+          </p>
           <p className="small" style={{marginTop:12}}>
             Optional: swap <code>REPLICATE_ENHANCE_MODEL</code> to another supported enhancement model later if you want a different quality/cost tradeoff.
           </p>
