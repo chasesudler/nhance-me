@@ -107,8 +107,8 @@ export async function POST(request) {
       );
     }
 
-    // Replicate file inputs need a public https:// URL, so the incoming
-    // data URI is hosted on Vercel Blob first.
+    // Replicate file inputs need a fetchable https:// URL, so the incoming
+    // data URI is hosted on Vercel Blob first (private upload + presigned URL).
     let imageUrl;
     try {
       imageUrl = await uploadImageToBlob(image, uniqueImageName('nhance-enhance'));
