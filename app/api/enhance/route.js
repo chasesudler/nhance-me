@@ -56,7 +56,9 @@ async function callReplicate(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.detail || data?.error || `Replicate request failed with ${response.status}`;
-    throw new Error(friendlyReplicateError(message));
+    const err = new Error(friendlyReplicateError(message));
+    err.detail = safeMessage(message, '');
+    throw err;
   }
   return data;
 }
@@ -131,9 +133,12 @@ export async function POST(request) {
     }
 
     if (current.status !== 'succeeded') {
+      const rawError = safeMessage(current.error, `Enhancement did not complete. Current status: ${current.status}`);
+      console.error('enhance prediction failed:', current.status, rawError);
       return Response.json(
         {
-          error: friendlyReplicateError(safeMessage(current.error, `Enhancement did not complete. Current status: ${current.status}`)),
+          error: friendlyReplicateError(rawError),
+          detail: rawError,
           status: current.status,
         },
         { status: 500 }
@@ -154,6 +159,12 @@ export async function POST(request) {
       status: current.status,
     });
   } catch (error) {
-    return Response.json({ error: error.message || 'AI enhancement is temporarily unavailable. Local preview was applied.' }, { status: 500 });
+    return Response.json(
+      {
+        error: error.message || 'AI enhancement is temporarily unavailable. Local preview was applied.',
+        detail: error.detail || undefined,
+      },
+      { status: 500 }
+    );
   }
 }
