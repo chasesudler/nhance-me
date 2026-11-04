@@ -145,6 +145,40 @@ function enhanceLocal(item, settings) {
   });
 }
 
+// The AI upscaler (real-esrgan) fails outright on large inputs (~5MP+), and
+// full-size phone/DSLR photos land exactly in that fail zone. The copy sent
+// to the API is capped at 1600px on the long edge and ~2MP total; the model
+// upscales 1.5-2x from there. The full 2600px local grade stays untouched as
+// the fallback deliverable. Smaller payloads also stay clear of Vercel's
+// 4.5MB request cap.
+function downscaleForAi(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(dataUrl);
+    img.onload = () => {
+      try {
+        const maxEdge = 1600;
+        const maxPixels = 2000000;
+        const edgeScale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const pixelScale = Math.min(1, Math.sqrt(maxPixels / (img.width * img.height)));
+        const scale = Math.min(edgeScale, pixelScale);
+        if (scale >= 1) return resolve(dataUrl);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.src = dataUrl;
+  });
+}
+
 async function enhanceApi(item, settings) {
   const res = await fetch(`${API_BASE}/api/enhance`, {
     method: 'POST',
@@ -221,7 +255,8 @@ export default function PremiumProcess() {
     }
 
     try {
-      const data = await enhanceApi({ ...item, url: localBase }, settings);
+      const aiCopy = await downscaleForAi(localBase);
+      const data = await enhanceApi({ ...item, url: aiCopy }, settings);
       setItems((prev) =>
         prev.map((i) =>
           i.id === item.id
