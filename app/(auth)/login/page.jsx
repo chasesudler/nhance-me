@@ -2,36 +2,85 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import {
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
 import Logo from '@/components/Logo';
-import { saveUser } from '@/lib/auth';
-import { API_BASE } from '@/lib/apiBase';
+import { exchangeIdTokenForSession, firebaseErrorMessage } from '@/lib/auth';
+import { getFirebaseAuth, isFirebaseConfigured } from '@/lib/firebase';
 
 export default function Login() {
-  const [email, setEmail] = useState('demo@nhanceme.app');
-  const [password, setPassword] = useState('password123');
-  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const router = useRouter();
+
+  async function finishSignIn(firebaseUser) {
+    await exchangeIdTokenForSession(firebaseUser);
+    router.push('/dashboard');
+  }
 
   async function submit(e) {
     e.preventDefault();
-    setBusy(true);
     setError('');
+    setNotice('');
+    const auth = getFirebaseAuth();
+    if (!auth) {
+      setError('Sign in is not set up yet. Please check back soon.');
+      return;
+    }
+    setBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Login failed. Please try again.');
-      saveUser(data.user);
-      router.push('/dashboard');
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      await finishSignIn(cred.user);
     } catch (err) {
-      setError(err.message || 'Login failed. Please try again.');
+      setError(firebaseErrorMessage(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function googleSignIn() {
+    setError('');
+    setNotice('');
+    const auth = getFirebaseAuth();
+    if (!auth) {
+      setError('Sign in is not set up yet. Please check back soon.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const cred = await signInWithPopup(auth, new GoogleAuthProvider());
+      await finishSignIn(cred.user);
+    } catch (err) {
+      setError(firebaseErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function forgotPassword() {
+    setError('');
+    setNotice('');
+    const auth = getFirebaseAuth();
+    if (!auth) {
+      setError('Sign in is not set up yet. Please check back soon.');
+      return;
+    }
+    if (!email.trim()) {
+      setError('Enter your email above first, then tap Forgot password.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setNotice('Password reset email sent. Check your inbox for the link.');
+    } catch (err) {
+      setError(firebaseErrorMessage(err));
     }
   }
 
@@ -39,9 +88,13 @@ export default function Login() {
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
         <Logo />
-        <h1>{mode === 'login' ? 'Welcome back' : 'Create your Nhance Me account'}</h1>
-        <p className="small">Use the demo credentials or enter any email to access the deployable demo dashboard.</p>
+        <h1>Welcome back</h1>
+        <p className="small">Log in to your Nhance Me account to enhance and stage your listing photos.</p>
+        {!isFirebaseConfigured && (
+          <div className="notice error-notice">Sign in is not set up yet. Please check back soon.</div>
+        )}
         {error && <div className="notice error-notice">{error}</div>}
+        {notice && <div className="notice">{notice}</div>}
         <div className="field">
           <label>Email</label>
           <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -50,18 +103,29 @@ export default function Login() {
           <label>Password</label>
           <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
         </div>
-        <button className="btn btn-primary" style={{ width: '100%' }} disabled={busy}>
-          {busy ? 'Signing in...' : mode === 'login' ? 'Log in' : 'Create account'}
+        <button className="btn btn-primary" style={{ width: '100%' }} disabled={busy || !isFirebaseConfigured}>
+          {busy ? 'Signing in...' : 'Log in'}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          style={{ width: '100%' }}
+          onClick={googleSignIn}
+          disabled={busy || !isFirebaseConfigured}
+        >
+          Continue with Google
         </button>
         <p className="small" style={{ textAlign: 'center' }}>
-          {mode === 'login' ? 'Need an account?' : 'Already have an account?'}{' '}
           <button
             type="button"
-            onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
+            onClick={forgotPassword}
             style={{ border: 0, background: 'transparent', color: '#7C3AED', fontWeight: 900 }}
           >
-            {mode === 'login' ? 'Create one' : 'Log in'}
+            Forgot password?
           </button>
+        </p>
+        <p className="small" style={{ textAlign: 'center' }}>
+          Need an account? <Link href="/signup">Create one</Link>
         </p>
         <p className="small">
           <Link href="/">← Back to home</Link>
