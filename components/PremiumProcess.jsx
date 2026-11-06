@@ -54,44 +54,109 @@ function rgb(h, s, l) {
   return [f(p, q, h + 1 / 3) * 255, f(p, q, h) * 255, f(p, q, h - 1 / 3) * 255];
 }
 
-function grade(imageData, settings) {
+// Reference-look grade (rebuilt 2026-11-06 against Chase's reference photo:
+// bright, neutral, airy MLS quality). Three measured steps:
+// 1) Auto white balance from bright-but-not-blown, low-saturation pixels
+//    (white trim and ceilings reveal the illuminant; windows are excluded).
+// 2) Adaptive exposure: a per-photo gain targets a bright median, applied
+//    through a luminance-ratio filmic shoulder so window detail survives
+//    instead of clipping to white.
+// 3) Gentle contrast + natural saturation, with the whites kept clean.
+// Stats are measured on a downscaled copy, then applied at full resolution.
+function gradeStats(img) {
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 900 / Math.max(img.width, img.height));
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const total = d.length / 4;
+
+  const lumHist = new Float64Array(256);
+  for (let i = 0; i < d.length; i += 4) {
+    lumHist[Math.round(lum(d[i], d[i + 1], d[i + 2]))] += 1;
+  }
+  const pct = (p) => {
+    const target = (p / 100) * total;
+    let acc = 0;
+    for (let v = 0; v < 256; v++) { acc += lumHist[v]; if (acc >= target) return v; }
+    return 255;
+  };
+  const med = pct(50), lo = pct(55), hi = pct(97);
+
+  const chanHist = [new Float64Array(256), new Float64Array(256), new Float64Array(256)];
+  let masked = 0, sumR = 0, sumG = 0, sumB = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    sumR += r; sumG += g; sumB += b;
+    const y = lum(r, g, b);
+    if (y < lo || y > hi) continue;
+    const mx = Math.max(r, g, b);
+    const sat = mx > 0 ? (mx - Math.min(r, g, b)) / mx : 0;
+    if (sat >= 0.2) continue;
+    chanHist[0][Math.round(r)] += 1;
+    chanHist[1][Math.round(g)] += 1;
+    chanHist[2][Math.round(b)] += 1;
+    masked += 1;
+  }
+  let est;
+  if (masked > 200) {
+    const histMedian = (hist) => {
+      const target = masked / 2;
+      let acc = 0;
+      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) return v; }
+      return 255;
+    };
+    est = [histMedian(chanHist[0]), histMedian(chanHist[1]), histMedian(chanHist[2])];
+  } else {
+    est = [sumR / total, sumG / total, sumB / total];
+  }
+  const gray = (est[0] + est[1] + est[2]) / 3;
+  let gains = est.map((e) => Math.min(1.3, Math.max(0.78, gray / Math.max(e, 1))));
+  gains = gains.map((g) => 1 + (g - 1) * 0.9);
+  const anchor = gains[1] || 1;
+  gains = gains.map((g) => g / anchor);
+  return { gains, med };
+}
+
+function grade(imageData, settings, stats) {
   const d = imageData.data;
   const integrity = settings.integrity !== false;
   // Integrity OFF = "creative boost": stronger contrast/saturation/sharpening.
   const boost = integrity ? 1 : 1.6;
-  const ex = (settings.exposure / 100) * boost;
-  const sat = 1 + (settings.color / 190) * boost;
-  const contrast = 1 + (settings.clarity / 280) * boost;
-  const lift = 5 + settings.exposure * 0.12;
+  const [gr, gg, gb] = stats.gains;
+
+  // Adaptive exposure: solve the gain so the shoulder maps the median
+  // luminance to ~183 (the bright MLS target measured from the reference).
+  const TARGET = 183;
+  const tNeed = 150 - 105 * Math.log(1 - (TARGET - 150) / 105);
+  let gAuto = tNeed / Math.max(stats.med, 1);
+  gAuto = Math.min(2.6, Math.max(1, gAuto));
+  const gain = gAuto * (1 + ((settings.exposure - 10) / 160) * boost);
+  // A photo that is already bright gets a high, gentle knee so the grade
+  // polishes it instead of darkening it.
+  const KNEE = gain <= 1.01 ? 200 : 150;
+  const SPAN = gain <= 1.01 ? 55 : 105;
+
+  const contrast = 1 + 0.06 * boost + ((settings.clarity - 20) / 280) * boost;
+  const sat = 1.06 + ((settings.color - 16) / 190) * boost;
 
   for (let i = 0; i < d.length; i += 4) {
-    let r = d[i], g = d[i + 1], b = d[i + 2];
-    const y0 = lum(r, g, b);
-    const sh = Math.max(0, 1 - y0 / 150);
-    const mid = Math.max(0, 1 - Math.abs(y0 - 130) / 130);
-    const hi = Math.max(0, (y0 - 178) / 77);
-
-    r += lift * sh + ex * 18 * mid;
-    g += lift * sh + ex * 18 * mid;
-    b += lift * sh + ex * 18 * mid;
+    let r = d[i] * gr, g = d[i + 1] * gg, b = d[i + 2] * gb;
 
     const y = lum(r, g, b);
-    const over = Math.max(0, y - 205);
-    if (over) {
-      const rec = over * 0.72;
-      r -= rec; g -= rec; b -= rec;
-    }
+    const yg = y * gain;
+    const yNew = yg <= KNEE ? yg : KNEE + SPAN * (1 - Math.exp(-(yg - KNEE) / SPAN));
+    const ratio = Math.min(3.2, Math.max(0, y > 0.5 ? yNew / Math.max(y, 1e-6) : gain));
+    r *= ratio; g *= ratio; b *= ratio;
 
     r = (r - 128) * contrast + 128;
     g = (g - 128) * contrast + 128;
     b = (b - 128) * contrast + 128;
 
-    r *= 1 + 0.012 * (1 - hi);
-    b *= 1 - 0.006 * (1 - hi);
-
     let [hh, ss, ll] = hsl(clamp(r), clamp(g), clamp(b));
-    ss = Math.min(0.86, ss * sat);
-    ll = Math.min(0.94, ll + 0.018 * sh + 0.008 * mid - 0.02 * hi);
+    ss = Math.min(0.86, ss * sat * (ll > 0.85 ? 0.92 : 1));
     [r, g, b] = rgb(hh, ss, ll);
 
     d[i] = clamp(r);
@@ -131,8 +196,9 @@ function enhanceLocal(item, settings) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const stats = gradeStats(img);
         let data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        data = grade(data, settings);
+        data = grade(data, settings, stats);
         const boost = settings.integrity !== false ? 1 : 1.6;
         data = sharpen(data, Math.max(0.025, (settings.clarity / 520) * boost));
         ctx.putImageData(data, 0, 0);
