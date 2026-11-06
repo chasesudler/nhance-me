@@ -2,7 +2,6 @@
 import { useMemo, useRef, useState } from 'react';
 import JSZip from 'jszip';
 import { AlertCircle, Download, UploadCloud, WandSparkles, Trash2 } from 'lucide-react';
-import { API_BASE } from '@/lib/apiBase';
 
 const MAX = 50;
 const CONC = 2;
@@ -55,14 +54,63 @@ function rgb(h, s, l) {
 }
 
 // Reference-look grade (rebuilt 2026-11-06 against Chase's reference photo:
-// bright, neutral, airy MLS quality). Three measured steps:
+// bright, neutral, airy MLS quality). Every step is deterministic work on
+// the original pixels — no generative model touches the Enhance path, so
+// nothing can be invented or hallucinated:
 // 1) Auto white balance from bright-but-not-blown, low-saturation pixels
 //    (white trim and ceilings reveal the illuminant; windows are excluded).
-// 2) Adaptive exposure: a per-photo gain targets a bright median, applied
+// 2) Light-imbalance flattening: a heavily blurred luminance field measures
+//    uneven lighting across the frame and divides it out.
+// 3) Gentle local contrast (dehaze) from a mid-frequency luminance field.
+// 4) Adaptive exposure: a per-photo gain targets a bright median, applied
 //    through a luminance-ratio filmic shoulder so window detail survives
-//    instead of clipping to white.
-// 3) Gentle contrast + natural saturation, with the whites kept clean.
+//    instead of clipping to white (this also tames glare hot spots).
+// 5) Gentle contrast + natural saturation, with the whites kept clean.
 // Stats are measured on a downscaled copy, then applied at full resolution.
+function downsampleLum(lumArr, sw, sh, dw, dh) {
+  const out = new Float32Array(dw * dh);
+  for (let y = 0; y < dh; y++) {
+    const y0 = Math.floor((y * sh) / dh), y1 = Math.max(y0 + 1, Math.floor(((y + 1) * sh) / dh));
+    for (let x = 0; x < dw; x++) {
+      const x0 = Math.floor((x * sw) / dw), x1 = Math.max(x0 + 1, Math.floor(((x + 1) * sw) / dw));
+      let sum = 0, n = 0;
+      for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) { sum += lumArr[yy * sw + xx]; n++; }
+      out[y * dw + x] = sum / Math.max(n, 1);
+    }
+  }
+  return out;
+}
+
+function boxBlurField(f, w, h, radius, passes) {
+  let cur = f;
+  for (let p = 0; p < passes; p++) {
+    const tmp = new Float32Array(cur);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let sum = 0, n = 0;
+      for (let xx = Math.max(0, x - radius); xx <= Math.min(w - 1, x + radius); xx++) { sum += cur[y * w + xx]; n++; }
+      tmp[y * w + x] = sum / n;
+    }
+    const out = new Float32Array(tmp);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let sum = 0, n = 0;
+      for (let yy = Math.max(0, y - radius); yy <= Math.min(h - 1, y + radius); yy++) { sum += tmp[yy * w + x]; n++; }
+      out[y * w + x] = sum / n;
+    }
+    cur = out;
+  }
+  return cur;
+}
+
+function sampleField(field, x, y, W, H) {
+  const fx = Math.min(field.w - 1.001, Math.max(0, (x / W) * field.w - 0.5));
+  const fy = Math.min(field.h - 1.001, Math.max(0, (y / H) * field.h - 0.5));
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const tx = fx - x0, ty = fy - y0;
+  const d = field.data, w = field.w;
+  const a = d[y0 * w + x0], b = d[y0 * w + x0 + 1], c = d[(y0 + 1) * w + x0], e = d[(y0 + 1) * w + x0 + 1];
+  return a + (b - a) * tx + (c - a) * ty + (a - b - c + e) * tx * ty;
+}
+
 function gradeStats(img) {
   const canvas = document.createElement('canvas');
   const scale = Math.min(1, 900 / Math.max(img.width, img.height));
@@ -72,10 +120,14 @@ function gradeStats(img) {
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
   const total = d.length / 4;
+  const sw = canvas.width, sh = canvas.height;
+  const lumArr = new Float32Array(total);
 
   const lumHist = new Float64Array(256);
-  for (let i = 0; i < d.length; i += 4) {
-    lumHist[Math.round(lum(d[i], d[i + 1], d[i + 2]))] += 1;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const y = lum(d[i], d[i + 1], d[i + 2]);
+    lumArr[p] = y;
+    lumHist[Math.round(y)] += 1;
   }
   const pct = (p) => {
     const target = (p / 100) * total;
@@ -117,19 +169,39 @@ function gradeStats(img) {
   gains = gains.map((g) => 1 + (g - 1) * 0.9);
   const anchor = gains[1] || 1;
   gains = gains.map((g) => g / anchor);
-  return { gains, med };
+
+  // Illumination field (light imbalance): coarse blurred luminance, stored
+  // as a per-area correction ratio toward the field median, tightly capped
+  // so warm rooms are not over-lifted.
+  const iw = 96, ih = Math.max(8, Math.round((96 * sh) / sw));
+  const illumRaw = boxBlurField(downsampleLum(lumArr, sw, sh, iw, ih), iw, ih, 3, 3);
+  const sorted = [...illumRaw].sort((a, b) => a - b);
+  const fieldMed = sorted[Math.floor(sorted.length / 2)] || 1;
+  const illumData = new Float32Array(illumRaw.length);
+  for (let i = 0; i < illumRaw.length; i++) {
+    illumData[i] = Math.min(1.18, Math.max(0.85, fieldMed / Math.max(illumRaw[i], 8)));
+  }
+  // Mid-frequency field for local contrast (dehaze / ghosting lift).
+  const mw = 288, mh = Math.max(8, Math.round((288 * sh) / sw));
+  const midData = boxBlurField(downsampleLum(lumArr, sw, sh, mw, mh), mw, mh, 5, 2);
+
+  return { gains, med, illum: { data: illumData, w: iw, h: ih }, mid: { data: midData, w: mw, h: mh } };
 }
+
+const PRESET_TARGETS = { 'luxury-dslr': 183, 'bright-interior': 194, 'listing-standard': 172 };
 
 function grade(imageData, settings, stats) {
   const d = imageData.data;
+  const W = imageData.width, H = imageData.height;
   const integrity = settings.integrity !== false;
   // Integrity OFF = "creative boost": stronger contrast/saturation/sharpening.
   const boost = integrity ? 1 : 1.6;
   const [gr, gg, gb] = stats.gains;
 
   // Adaptive exposure: solve the gain so the shoulder maps the median
-  // luminance to ~183 (the bright MLS target measured from the reference).
-  const TARGET = 183;
+  // luminance to the preset target (183 = the bright MLS level measured
+  // from Chase's reference photo).
+  const TARGET = PRESET_TARGETS[settings.preset] || 183;
   const tNeed = 150 - 105 * Math.log(1 - (TARGET - 150) / 105);
   let gAuto = tNeed / Math.max(stats.med, 1);
   gAuto = Math.min(2.6, Math.max(1, gAuto));
@@ -140,10 +212,23 @@ function grade(imageData, settings, stats) {
   const SPAN = gain <= 1.01 ? 55 : 105;
 
   const contrast = 1 + 0.06 * boost + ((settings.clarity - 20) / 280) * boost;
-  const sat = 1.06 + ((settings.color - 16) / 190) * boost;
+  const clarityAmt = 0.1 * boost + ((settings.clarity - 20) / 600) * boost;
+  const satBase = settings.preset === 'bright-interior' ? 1.04 : 1.02;
+  const sat = satBase + ((settings.color - 16) / 190) * boost;
 
-  for (let i = 0; i < d.length; i += 4) {
-    let r = d[i] * gr, g = d[i + 1] * gg, b = d[i + 2] * gb;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const px = p % W, py = (p / W) | 0;
+    const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
+
+    // Local contrast from the mid-frequency field (lifts veiling glare).
+    const y0 = lum(r0, g0, b0);
+    const midY = sampleField(stats.mid, px, py, W, H);
+    const local = Math.min(1.22, Math.max(0.82, 1 + ((y0 - midY) / 255) * clarityAmt));
+
+    // White balance, then light-imbalance flattening.
+    let r = r0 * local * gr, g = g0 * local * gg, b = b0 * local * gb;
+    const ill = sampleField(stats.illum, px, py, W, H);
+    r *= ill; g *= ill; b *= ill;
 
     const y = lum(r, g, b);
     const yg = y * gain;
@@ -182,6 +267,71 @@ function sharpen(imageData, amount = 0.06) {
   return imageData;
 }
 
+// Spatial correction is MANUAL by design (added 2026-11-06): automatic
+// tilt detection was tested against real interiors and could not reliably
+// tell camera roll from ordinary perspective — it rotated photos that were
+// already straight. So the user straightens with sliders and sees the exact
+// result; the app never warps a room on a guess. Both transforms are plain
+// resampling of the original pixels.
+function applySpatial(src, settings) {
+  const straighten = settings.straighten || 0;
+  const verticals = settings.verticals || 0;
+  if (!straighten && !verticals) return src;
+  let cur = src;
+  if (verticals) {
+    // Keystone: horizontal strips drawn with a width scale that varies
+    // linearly from top to bottom (widens one end, narrows the other).
+    const k = (verticals / 100) * 0.16;
+    const W = cur.width, H = cur.height, N = 40;
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    for (let j = 0; j < N; j++) {
+      const t0 = j / N, tc = (j + 0.5) / N;
+      const s = 1 + k * (0.5 - tc) * 2;
+      const sh = H / N + 1;
+      ctx.drawImage(cur, 0, t0 * H, W, sh, (W - W * s) / 2, t0 * H, W * s, sh);
+    }
+    cur = out;
+  }
+  if (straighten) {
+    // Rotate, then crop to the inscribed rectangle so no wedge edges show.
+    const rad = (straighten * Math.PI) / 180;
+    const th = Math.abs(rad);
+    const W = cur.width, H = cur.height;
+    const cw = Math.round(W * Math.cos(th) - H * Math.sin(th));
+    const ch = Math.round(H * Math.cos(th) - W * Math.sin(th));
+    if (cw >= W * 0.85 && ch >= H * 0.85) {
+      const out = document.createElement('canvas');
+      out.width = cw; out.height = ch;
+      const ctx = out.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.translate(cw / 2, ch / 2);
+      ctx.rotate(rad);
+      ctx.drawImage(cur, -W / 2, -H / 2);
+      cur = out;
+    }
+  }
+  return cur;
+}
+
+function crop43(src) {
+  const W = src.width, H = src.height;
+  const target = W >= H ? 4 / 3 : 3 / 4;
+  if (Math.abs(W / H - target) < 0.01) return src;
+  let cw = W, ch = H;
+  if (W / H > target) cw = Math.round(H * target);
+  else ch = Math.round(W / target);
+  const out = document.createElement('canvas');
+  out.width = cw; out.height = ch;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(src, (W - cw) / 2, (H - ch) / 2, cw, ch, 0, 0, cw, ch);
+  return out;
+}
+
 function enhanceLocal(item, settings) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -196,64 +346,21 @@ function enhanceLocal(item, settings) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const stats = gradeStats(img);
-        let data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const work = applySpatial(canvas, settings);
+        const stats = gradeStats(work);
+        const wctx = work.getContext('2d', { willReadFrequently: true });
+        let data = wctx.getImageData(0, 0, work.width, work.height);
         data = grade(data, settings, stats);
         const boost = settings.integrity !== false ? 1 : 1.6;
         data = sharpen(data, Math.max(0.025, (settings.clarity / 520) * boost));
-        ctx.putImageData(data, 0, 0);
-        resolve(canvas.toDataURL('image/jpeg', 0.94));
+        wctx.putImageData(data, 0, 0);
+        resolve(crop43(work).toDataURL('image/jpeg', 0.94));
       } catch (err) {
         reject(new Error(`Could not process ${item.name}.`));
       }
     };
     img.src = item.url;
   });
-}
-
-// The AI upscaler (real-esrgan) fails outright on large inputs (~5MP+), and
-// full-size phone/DSLR photos land exactly in that fail zone. The copy sent
-// to the API is capped at 1600px on the long edge and ~2MP total; the model
-// upscales 1.5-2x from there. The full 2600px local grade stays untouched as
-// the fallback deliverable. Smaller payloads also stay clear of Vercel's
-// 4.5MB request cap.
-function downscaleForAi(dataUrl) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onerror = () => resolve(dataUrl);
-    img.onload = () => {
-      try {
-        const maxEdge = 1600;
-        const maxPixels = 2000000;
-        const edgeScale = Math.min(1, maxEdge / Math.max(img.width, img.height));
-        const pixelScale = Math.min(1, Math.sqrt(maxPixels / (img.width * img.height)));
-        const scale = Math.min(edgeScale, pixelScale);
-        if (scale >= 1) return resolve(dataUrl);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.92));
-      } catch {
-        resolve(dataUrl);
-      }
-    };
-    img.src = dataUrl;
-  });
-}
-
-async function enhanceApi(item, settings) {
-  const res = await fetch(`${API_BASE}/api/enhance`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: item.url, name: item.name, settings }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'AI enhancement failed.');
-  return data;
 }
 
 async function asBlob(src) {
@@ -286,11 +393,12 @@ export default function PremiumProcess() {
     exposure: 10,
     color: 16,
     clarity: 20,
+    straighten: 0,
+    verticals: 0,
     integrity: true,
   });
 
   const completed = useMemo(() => items.filter((i) => i.enhanced).length, [items]);
-  const aiCount = useMemo(() => items.filter((i) => i.mode === 'ai').length, [items]);
   const localCount = useMemo(() => items.filter((i) => i.mode === 'local').length, [items]);
   const errored = useMemo(() => items.filter((i) => i.error).length, [items]);
 
@@ -309,35 +417,9 @@ export default function PremiumProcess() {
   }
 
   async function processOne(item) {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: 'Applying Premium MLS protected DSLR grade', error: '' } : i)));
-    let localBase;
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: 'Applying Premium MLS studio grade', error: '' } : i)));
     try {
-      localBase = await enhanceLocal(item, settings);
-    } catch (err) {
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: 'Failed', error: err.message || 'Could not process this image.' } : i))
-      );
-      return { mode: 'failed' };
-    }
-
-    try {
-      const aiCopy = await downscaleForAi(localBase);
-      const data = await enhanceApi({ ...item, url: aiCopy }, settings);
-      setItems((prev) =>
-        prev.map((i) =>
-          i.id === item.id
-            ? {
-                ...i,
-                enhanced: data.enhancedUrl || localBase,
-                mode: data.enhancedUrl ? 'ai' : 'local',
-                status: `Complete - AI enhanced${data.model ? ` (${data.model})` : ''}`,
-                error: '',
-              }
-            : i
-        )
-      );
-      return { mode: data.enhancedUrl ? 'ai' : 'local' };
-    } catch {
+      const localBase = await enhanceLocal(item, settings);
       setItems((prev) =>
         prev.map((i) =>
           i.id === item.id
@@ -345,13 +427,18 @@ export default function PremiumProcess() {
                 ...i,
                 enhanced: localBase,
                 mode: 'local',
-                status: 'Complete - Premium MLS local grade',
+                status: 'Complete - Premium MLS studio grade',
                 error: '',
               }
             : i
         )
       );
-      return { mode: 'local-fallback' };
+      return { mode: 'local' };
+    } catch (err) {
+      setItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, status: 'Failed', error: err.message || 'Could not process this image.' } : i))
+      );
+      return { mode: 'failed' };
     }
   }
 
@@ -361,19 +448,18 @@ export default function PremiumProcess() {
     try {
       const queue = items.filter((i) => !i.enhanced || i.error);
       let index = 0;
-      let ai = 0;
-      let fb = 0;
+      let done = 0;
+      let failed = 0;
       async function worker() {
         while (index < queue.length) {
           const result = await processOne(queue[index++]);
-          if (result?.mode === 'local-fallback') fb++;
-          else if (result?.mode === 'ai') ai++;
+          if (result?.mode === 'local') done++;
+          else if (result?.mode === 'failed') failed++;
         }
       }
       await Promise.all(Array.from({ length: Math.min(CONC, queue.length || 1) }, worker));
-      if (fb && !ai) setBanner('AI enhancement did not respond, so the app used the protected Premium MLS local grade. Highlights are capped to prevent white-wall blowout.');
-      else if (fb) setBanner(`Batch finished. ${ai} image(s) used AI and ${fb} used the protected local grade.`);
-      else if (ai) setBanner(`Batch finished. ${ai} image(s) used the production AI pipeline.`);
+      if (done) setBanner(`Batch finished. ${done} image(s) enhanced with the deterministic studio grade — original pixels only, nothing invented.${failed ? ` ${failed} could not be processed.` : ''}`);
+      else if (failed) setBanner(`${failed} image(s) could not be processed.`);
     } finally {
       setBusy(false);
     }
@@ -426,7 +512,7 @@ export default function PremiumProcess() {
           <UploadCloud size={42} />
           <h2>Drop listing photos here</h2>
           <p className="small">
-            Or use the upload button. Current batch: {items.length}/{MAX}. Complete: {completed}. AI: {aiCount}. Local: {localCount}
+            Or use the upload button. Current batch: {items.length}/{MAX}. Complete: {completed}. Studio grade: {localCount}
             {errored ? `. Failed: ${errored}` : ''}.
           </p>
           <input
@@ -451,6 +537,8 @@ export default function PremiumProcess() {
           </button>
           <span className="pill">Premium MLS grade</span>
           <span className="pill">Highlight protected</span>
+          <span className="pill">No AI — original pixels only</span>
+          <span className="pill">4:3 output</span>
         </div>
 
         <div className="range-grid">
@@ -473,6 +561,14 @@ export default function PremiumProcess() {
           <div className="field">
             <label>DSLR clarity</label>
             <input type="range" min="0" max="35" value={settings.clarity} onChange={(e) => setSettings({ ...settings, clarity: +e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Straighten (tilt) {settings.straighten ? `${settings.straighten}°` : ''}</label>
+            <input type="range" min="-5" max="5" step="0.1" value={settings.straighten} onChange={(e) => setSettings({ ...settings, straighten: +e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Verticals (keystone) {settings.verticals ? `${settings.verticals}` : ''}</label>
+            <input type="range" min="-100" max="100" step="1" value={settings.verticals} onChange={(e) => setSettings({ ...settings, verticals: +e.target.value })} />
           </div>
         </div>
 
@@ -504,7 +600,7 @@ export default function PremiumProcess() {
           </div>
         )}
         <p className="small">
-          <b>Batch consistency:</b> every image receives the same Premium MLS recipe, but highlights are protected so white walls, ceilings, and windows stay natural.
+          <b>Batch consistency:</b> every image receives the same Premium MLS recipe — white balance, even lighting, protected highlights — and comes out at 4:3. Spatial fixes stay in your hands: set Straighten or Verticals when a shot needs it, and the app never warps a room on a guess.
         </p>
       </div>
 
