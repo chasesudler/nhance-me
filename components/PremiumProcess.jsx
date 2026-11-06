@@ -59,28 +59,17 @@ function rgb(h, s, l) {
 // nothing can be invented or hallucinated:
 // 1) Auto white balance from bright-but-not-blown, low-saturation pixels
 //    (white trim and ceilings reveal the illuminant; windows are excluded).
-// 2) Light-imbalance flattening: a heavily blurred luminance field measures
-//    uneven lighting across the frame and divides it out.
-// 3) Gentle local contrast (dehaze) from a mid-frequency luminance field.
-// 4) Adaptive exposure: a per-photo gain targets a bright median, applied
+// 2) Light-imbalance flattening: a median-cell luminance field divides out
+//    broad lighting gradients, capped to about +-8%. Medians matter here:
+//    a bright light or window barely moves a cell median, so the field
+//    never digs a dark moat around bright objects (the classic halo).
+//    There is deliberately NO local-contrast step anywhere in this grade —
+//    local contrast is what draws halos around lights and window frames.
+// 3) Adaptive exposure: a per-photo gain targets a bright median, applied
 //    through a luminance-ratio filmic shoulder so window detail survives
-//    instead of clipping to white (this also tames glare hot spots).
-// 5) Gentle contrast + natural saturation, with the whites kept clean.
+//    instead of clipping to white.
+// 4) Gentle contrast + natural saturation, with the whites kept clean.
 // Stats are measured on a downscaled copy, then applied at full resolution.
-function downsampleLum(lumArr, sw, sh, dw, dh) {
-  const out = new Float32Array(dw * dh);
-  for (let y = 0; y < dh; y++) {
-    const y0 = Math.floor((y * sh) / dh), y1 = Math.max(y0 + 1, Math.floor(((y + 1) * sh) / dh));
-    for (let x = 0; x < dw; x++) {
-      const x0 = Math.floor((x * sw) / dw), x1 = Math.max(x0 + 1, Math.floor(((x + 1) * sw) / dw));
-      let sum = 0, n = 0;
-      for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) { sum += lumArr[yy * sw + xx]; n++; }
-      out[y * dw + x] = sum / Math.max(n, 1);
-    }
-  }
-  return out;
-}
-
 function boxBlurField(f, w, h, radius, passes) {
   let cur = f;
   for (let p = 0; p < passes; p++) {
@@ -170,22 +159,32 @@ function gradeStats(img) {
   const anchor = gains[1] || 1;
   gains = gains.map((g) => g / anchor);
 
-  // Illumination field (light imbalance): coarse blurred luminance, stored
-  // as a per-area correction ratio toward the field median, tightly capped
-  // so warm rooms are not over-lifted.
-  const iw = 96, ih = Math.max(8, Math.round((96 * sh) / sw));
-  const illumRaw = boxBlurField(downsampleLum(lumArr, sw, sh, iw, ih), iw, ih, 3, 3);
+  // Illumination field (light imbalance): per-cell MEDIAN luminance on a
+  // 64-wide grid, blurred, stored as a correction ratio toward the field
+  // median and capped to about +-8%. Because each cell is a median, small
+  // bright sources (ceiling lights, windows) cannot pull the field up and
+  // leave a dark halo moat around themselves.
+  const iw = 64, ih = Math.max(6, Math.round((64 * sh) / sw));
+  const cellField = new Float32Array(iw * ih);
+  for (let cy = 0; cy < ih; cy++) {
+    const y0 = Math.floor((cy * sh) / ih), y1 = Math.max(y0 + 1, Math.floor(((cy + 1) * sh) / ih));
+    for (let cx = 0; cx < iw; cx++) {
+      const x0 = Math.floor((cx * sw) / iw), x1 = Math.max(x0 + 1, Math.floor(((cx + 1) * sw) / iw));
+      const vals = [];
+      for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) vals.push(lumArr[yy * sw + xx]);
+      vals.sort((a, b) => a - b);
+      cellField[cy * iw + cx] = vals[Math.floor(vals.length / 2)] || 0;
+    }
+  }
+  const illumRaw = boxBlurField(cellField, iw, ih, 3, 2);
   const sorted = [...illumRaw].sort((a, b) => a - b);
   const fieldMed = sorted[Math.floor(sorted.length / 2)] || 1;
   const illumData = new Float32Array(illumRaw.length);
   for (let i = 0; i < illumRaw.length; i++) {
-    illumData[i] = Math.min(1.18, Math.max(0.85, fieldMed / Math.max(illumRaw[i], 8)));
+    illumData[i] = Math.min(1.08, Math.max(0.93, fieldMed / Math.max(illumRaw[i], 8)));
   }
-  // Mid-frequency field for local contrast (dehaze / ghosting lift).
-  const mw = 288, mh = Math.max(8, Math.round((288 * sh) / sw));
-  const midData = boxBlurField(downsampleLum(lumArr, sw, sh, mw, mh), mw, mh, 5, 2);
 
-  return { gains, med, illum: { data: illumData, w: iw, h: ih }, mid: { data: midData, w: mw, h: mh } };
+  return { gains, med, illum: { data: illumData, w: iw, h: ih } };
 }
 
 const PRESET_TARGETS = { 'luxury-dslr': 183, 'bright-interior': 194, 'listing-standard': 172 };
@@ -212,21 +211,16 @@ function grade(imageData, settings, stats) {
   const SPAN = gain <= 1.01 ? 55 : 105;
 
   const contrast = 1 + 0.06 * boost + ((settings.clarity - 20) / 280) * boost;
-  const clarityAmt = 0.1 * boost + ((settings.clarity - 20) / 600) * boost;
   const satBase = settings.preset === 'bright-interior' ? 1.04 : 1.02;
   const sat = satBase + ((settings.color - 16) / 190) * boost;
 
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     const px = p % W, py = (p / W) | 0;
-    const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
 
-    // Local contrast from the mid-frequency field (lifts veiling glare).
-    const y0 = lum(r0, g0, b0);
-    const midY = sampleField(stats.mid, px, py, W, H);
-    const local = Math.min(1.22, Math.max(0.82, 1 + ((y0 - midY) / 255) * clarityAmt));
-
-    // White balance, then light-imbalance flattening.
-    let r = r0 * local * gr, g = g0 * local * gg, b = b0 * local * gb;
+    // White balance, then light-imbalance flattening. Every step here is
+    // either per-pixel or driven by an ultra-smooth field, so nothing in
+    // the chain can draw an edge or a halo.
+    let r = d[i] * gr, g = d[i + 1] * gg, b = d[i + 2] * gb;
     const ill = sampleField(stats.illum, px, py, W, H);
     r *= ill; g *= ill; b *= ill;
 
@@ -352,7 +346,7 @@ function enhanceLocal(item, settings) {
         let data = wctx.getImageData(0, 0, work.width, work.height);
         data = grade(data, settings, stats);
         const boost = settings.integrity !== false ? 1 : 1.6;
-        data = sharpen(data, Math.max(0.025, (settings.clarity / 520) * boost));
+        data = sharpen(data, Math.max(0.018, (settings.clarity / 760) * boost));
         wctx.putImageData(data, 0, 0);
         resolve(crop43(work).toDataURL('image/jpeg', 0.94));
       } catch (err) {
