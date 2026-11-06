@@ -164,7 +164,7 @@ function gradeStats(img) {
   // median and capped to about +-8%. Because each cell is a median, small
   // bright sources (ceiling lights, windows) cannot pull the field up and
   // leave a dark halo moat around themselves.
-  const iw = 64, ih = Math.max(6, Math.round((64 * sh) / sw));
+  const iw = 128, ih = Math.max(6, Math.round((128 * sh) / sw));
   const cellField = new Float32Array(iw * ih);
   for (let cy = 0; cy < ih; cy++) {
     const y0 = Math.floor((cy * sh) / ih), y1 = Math.max(y0 + 1, Math.floor(((cy + 1) * sh) / ih));
@@ -176,12 +176,12 @@ function gradeStats(img) {
       cellField[cy * iw + cx] = vals[Math.floor(vals.length / 2)] || 0;
     }
   }
-  const illumRaw = boxBlurField(cellField, iw, ih, 3, 2);
+  const illumRaw = boxBlurField(cellField, iw, ih, 3, 3);
   const sorted = [...illumRaw].sort((a, b) => a - b);
   const fieldMed = sorted[Math.floor(sorted.length / 2)] || 1;
   const illumData = new Float32Array(illumRaw.length);
   for (let i = 0; i < illumRaw.length; i++) {
-    illumData[i] = Math.min(1.08, Math.max(0.93, fieldMed / Math.max(illumRaw[i], 8)));
+    illumData[i] = Math.min(1.10, Math.max(0.90, fieldMed / Math.max(illumRaw[i], 8)));
   }
 
   return { gains, med, illum: { data: illumData, w: iw, h: ih } };
@@ -252,7 +252,7 @@ function sharpen(imageData, amount = 0.06) {
     for (let x = 1; x < width - 1; x++) {
       const idx = (y * width + x) * 4;
       for (let c = 0; c < 3; c++) {
-        const center = copy[idx + c] * 5;
+        const center = copy[idx + c] * 4;
         const near = copy[idx - 4 + c] + copy[idx + 4 + c] + copy[idx - width * 4 + c] + copy[idx + width * 4 + c];
         data[idx + c] = clamp(copy[idx + c] + (center - near) * amount);
       }
