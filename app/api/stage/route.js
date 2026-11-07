@@ -20,7 +20,11 @@ const REPLICATE_MODEL = process.env.REPLICATE_STAGE_MODEL || 'black-forest-labs/
 // final image is composited over the ORIGINAL photo. The property itself
 // (floor, walls, ceiling, fixtures, view) then stays pixel-identical by
 // construction, instead of trusting the staging model to preserve it.
-const CUTOUT_MODEL = 'lucataco/remove-bg';
+// NOTE (2026-11-07): lucataco/remove-bg was the first cutout model. Its
+// prediction creation returned a deterministic 404 ("The requested resource
+// could not be found") on all 3 attempts in the 08:20 live run, even though
+// the model page exists on Replicate, so the cutout now uses cjwbw/rembg.
+const CUTOUT_MODEL = 'cjwbw/rembg';
 
 const MAX_POLLS = 28;
 const POLL_INTERVAL_MS = 2000;
