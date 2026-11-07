@@ -53,6 +53,7 @@ export default function Staging() {
   const [status, setStatus] = useState('Awaiting image');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [integrityNote, setIntegrityNote] = useState('');
   const input = useRef(null);
 
   async function pick(e) {
@@ -77,6 +78,7 @@ export default function Staging() {
     setLoading(true);
     setError('');
     setResult(null);
+    setIntegrityNote('');
     setStatus('Generating real virtual staging. This can take up to one minute...');
 
     try {
@@ -91,7 +93,8 @@ export default function Staging() {
       if (!data.stagedUrl) throw new Error('The staging engine completed but did not return an image.');
 
       setResult(data.stagedUrl);
-      setStatus(`Staging complete${data.model ? ` (${data.model})` : ''}`);
+      if (data.integrityNote) setIntegrityNote(data.integrityNote);
+      setStatus(`Staging complete${data.model ? ` (${data.model})` : ''}${data.integrity === 'original-preserved' ? ' — original surfaces preserved' : ''}`);
     } catch (err) {
       const message = isNetworkError(err.message)
         ? 'The staging request failed before the server could respond. This usually means the photo was too large, the function timed out, or the staging model/billing needs attention. Try again with this optimized upload, then check Vercel Function logs if it repeats.'
@@ -157,6 +160,7 @@ export default function Staging() {
 
           {error && <div className="notice error-notice">{error}</div>}
           <p className="small">Status: {status}</p>
+          {integrityNote && <p className="small">{integrityNote}</p>}
         </div>
 
         <div className="card">
