@@ -78,9 +78,36 @@ async function callReplicate(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.detail || data?.error || `Replicate request failed with ${response.status}`;
-    throw new Error(friendlyReplicateError(message));
+    const err = new Error(friendlyReplicateError(message));
+    err.status = response.status;
+    throw err;
   }
   return data;
+}
+
+function isThrottleError(error) {
+  if (error?.status === 429) return true;
+  return /throttl|rate limit/i.test(error?.message || '');
+}
+
+// Replicate throttles prediction creation when account credit is low (the
+// limit resets in about 2 seconds). Retry a throttled creation a few times
+// with a short wait instead of failing the step outright.
+async function createPrediction(path, input, attempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await callReplicate(path, {
+        method: 'POST',
+        body: JSON.stringify({ input }),
+      });
+    } catch (error) {
+      lastError = error;
+      if (!isThrottleError(error) || attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+  throw lastError;
 }
 
 async function pollPrediction(predictionId, maxPolls, intervalMs) {
@@ -138,10 +165,7 @@ async function compositeStagedOverOriginal({ stagedUrl, originalDataUri }) {
   if (!parsed) throw new Error('Original image could not be read for compositing.');
   const originalBuffer = Buffer.from(parsed.base64, 'base64');
 
-  const cutoutPrediction = await callReplicate(`/models/${CUTOUT_MODEL}/predictions`, {
-    method: 'POST',
-    body: JSON.stringify({ input: { image: stagedUrl } }),
-  });
+  const cutoutPrediction = await createPrediction(`/models/${CUTOUT_MODEL}/predictions`, { image: stagedUrl });
   const cutoutDone = await pollPrediction(cutoutPrediction.id, MAX_CUTOUT_POLLS, CUTOUT_POLL_INTERVAL_MS);
   if (cutoutDone.status !== 'succeeded') throw new Error(`Furniture cutout did not complete (${cutoutDone.status}).`);
   const cutoutUrl = extractImageUrl(cutoutDone.output);
@@ -206,10 +230,7 @@ export async function POST(request) {
       return Response.json({ error: err.message || 'Could not prepare the image for staging.' }, { status: err.status || 400 });
     }
 
-    const prediction = await callReplicate(`/models/${REPLICATE_MODEL}/predictions`, {
-      method: 'POST',
-      body: JSON.stringify({ input: buildModelInput(imageUrl, { ...body, notes }) }),
-    });
+    const prediction = await createPrediction(`/models/${REPLICATE_MODEL}/predictions`, buildModelInput(imageUrl, { ...body, notes }));
 
     const current = await pollPrediction(prediction.id, MAX_POLLS, POLL_INTERVAL_MS);
 
