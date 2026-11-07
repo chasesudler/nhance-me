@@ -91,11 +91,19 @@ async function callReplicate(path, options = {}) {
   return data;
 }
 
-// Replicate throttles prediction creation when account credit is low (the
-// limit resets in about 2 seconds). Retry a retryable creation a few times
-// with a short wait instead of failing the step outright. The friendly
+// Replicate throttles prediction creation when account credit is low. The
+// throttle message states when the window clears ("resets in ~7s"), and the
+// wait must honor it: on 2026-11-07 three fixed 3s waits all landed inside
+// a 7s window and every cutout attempt throttled. Parse the stated reset
+// and wait just past it, capped at 15s. Retry a retryable creation a few times
+// with that wait instead of failing the step outright. The friendly
 // message mapping is only correct for the staging model, so callers that
 // talk to another model pass friendly: false and get the raw error text.
+function throttleResetMs(message) {
+  const match = /resets in ~?(\d+)s/i.exec(message || '');
+  if (!match) return 3000;
+  return Math.min(15000, (parseInt(match[1], 10) + 1) * 1000);
+}
 async function createPrediction(path, input, { attempts = 3, friendly = true, retryStatuses = [429] } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -110,7 +118,10 @@ async function createPrediction(path, input, { attempts = 3, friendly = true, re
       const retryable =
         retryStatuses.includes(error?.status) || /throttl|rate limit/i.test(error?.rawMessage || error?.message || '');
       if (!retryable || attempt === attempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const message = error?.rawMessage || error?.message || '';
+      const waitMs = /throttl|rate limit/i.test(message) ? throttleResetMs(message) : 3000;
+      console.warn(`[nhance-me] prediction creation attempt ${attempt} failed (${error?.status}); retrying in ${waitMs / 1000}s.`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
   throw lastError;
