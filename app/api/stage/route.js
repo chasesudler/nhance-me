@@ -119,7 +119,15 @@ async function createPrediction(path, input, { attempts = 3, friendly = true, re
         retryStatuses.includes(error?.status) || /throttl|rate limit/i.test(error?.rawMessage || error?.message || '');
       if (!retryable || attempt === attempts) throw error;
       const message = error?.rawMessage || error?.message || '';
-      const waitMs = /throttl|rate limit/i.test(message) ? throttleResetMs(message) : 3000;
+      const isThrottle = /throttl|rate limit/i.test(message);
+      // The low-credit limiter answers some throttled creations with a 404
+      // instead of a 429 (observed 2026-11-07: 429, then 404, then 429
+      // within one run, same endpoint, same input), so a 404 gets the same
+      // long wait. The stated reset is approximate, so wait at least 12s to
+      // clear the ~7-10s token window.
+      const waitMs = (isThrottle || error?.status === 404)
+        ? Math.max(throttleResetMs(message), 12000)
+        : 3000;
       console.warn(`[nhance-me] prediction creation attempt ${attempt} failed (${error?.status}); retrying in ${waitMs / 1000}s.`);
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
