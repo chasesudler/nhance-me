@@ -71,51 +71,53 @@ function friendlyReplicateError(message = '') {
 }
 
 async function callReplicate(path, options = {}) {
+  const { friendly = true, ...fetchOptions } = options;
   const response = await fetch(`https://api.replicate.com/v1${path}`, {
-    ...options,
-    headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...fetchOptions,
+    headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}`, 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.detail || data?.error || `Replicate request failed with ${response.status}`;
-    const err = new Error(friendlyReplicateError(message));
+    const err = new Error(friendly ? friendlyReplicateError(message) : message);
     err.status = response.status;
+    err.rawMessage = message;
     throw err;
   }
   return data;
 }
 
-function isThrottleError(error) {
-  if (error?.status === 429) return true;
-  return /throttl|rate limit/i.test(error?.message || '');
-}
-
 // Replicate throttles prediction creation when account credit is low (the
-// limit resets in about 2 seconds). Retry a throttled creation a few times
-// with a short wait instead of failing the step outright.
-async function createPrediction(path, input, attempts = 3) {
+// limit resets in about 2 seconds). Retry a retryable creation a few times
+// with a short wait instead of failing the step outright. The friendly
+// message mapping is only correct for the staging model, so callers that
+// talk to another model pass friendly: false and get the raw error text.
+async function createPrediction(path, input, { attempts = 3, friendly = true, retryStatuses = [429] } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await callReplicate(path, {
         method: 'POST',
         body: JSON.stringify({ input }),
+        friendly,
       });
     } catch (error) {
       lastError = error;
-      if (!isThrottleError(error) || attempt === attempts) throw error;
+      const retryable =
+        retryStatuses.includes(error?.status) || /throttl|rate limit/i.test(error?.rawMessage || error?.message || '');
+      if (!retryable || attempt === attempts) throw error;
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
   }
   throw lastError;
 }
 
-async function pollPrediction(predictionId, maxPolls, intervalMs) {
-  let current = await callReplicate(`/predictions/${predictionId}`);
+async function pollPrediction(predictionId, maxPolls, intervalMs, friendly = true) {
+  let current = await callReplicate(`/predictions/${predictionId}`, { friendly });
   for (let i = 0; i < maxPolls; i += 1) {
     if (['succeeded', 'failed', 'canceled'].includes(current.status)) return current;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    current = await callReplicate(`/predictions/${predictionId}`);
+    current = await callReplicate(`/predictions/${predictionId}`, { friendly });
   }
   return current;
 }
@@ -165,8 +167,12 @@ async function compositeStagedOverOriginal({ stagedUrl, originalDataUri }) {
   if (!parsed) throw new Error('Original image could not be read for compositing.');
   const originalBuffer = Buffer.from(parsed.base64, 'base64');
 
-  const cutoutPrediction = await createPrediction(`/models/${CUTOUT_MODEL}/predictions`, { image: stagedUrl });
-  const cutoutDone = await pollPrediction(cutoutPrediction.id, MAX_CUTOUT_POLLS, CUTOUT_POLL_INTERVAL_MS);
+  const cutoutPrediction = await createPrediction(
+    `/models/${CUTOUT_MODEL}/predictions`,
+    { image: stagedUrl },
+    { friendly: false, retryStatuses: [429, 404, 500, 502, 503] }
+  );
+  const cutoutDone = await pollPrediction(cutoutPrediction.id, MAX_CUTOUT_POLLS, CUTOUT_POLL_INTERVAL_MS, false);
   if (cutoutDone.status !== 'succeeded') throw new Error(`Furniture cutout did not complete (${cutoutDone.status}).`);
   const cutoutUrl = extractImageUrl(cutoutDone.output);
   if (!cutoutUrl) throw new Error('Furniture cutout completed but returned no image.');
