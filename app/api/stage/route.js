@@ -171,9 +171,19 @@ async function compositeStagedOverOriginal({ stagedUrl, originalDataUri }) {
   if (!parsed) throw new Error('Original image could not be read for compositing.');
   const originalBuffer = Buffer.from(parsed.base64, 'base64');
 
+  // Pass the staged image as bytes, not a URL. Two different cutout models
+  // both returned a deterministic 404 ("The requested resource could not be
+  // found") when handed the staged image URL on 2026-11-07, while the staging
+  // call with a Blob URL worked, so the URL itself is the prime suspect.
+  // A data URI removes that variable entirely.
+  const stagedResponse = await fetch(stagedUrl);
+  if (!stagedResponse.ok) throw new Error(`Staged image could not be downloaded (${stagedResponse.status}).`);
+  const stagedBuffer = Buffer.from(await stagedResponse.arrayBuffer());
+  const stagedDataUri = `data:image/jpeg;base64,${stagedBuffer.toString('base64')}`;
+
   const cutoutPrediction = await createPrediction(
     `/models/${CUTOUT_MODEL}/predictions`,
-    { image: stagedUrl },
+    { image: stagedDataUri },
     { friendly: false, retryStatuses: [429, 404, 500, 502, 503] }
   );
   const cutoutDone = await pollPrediction(cutoutPrediction.id, MAX_CUTOUT_POLLS, CUTOUT_POLL_INTERVAL_MS, false);
@@ -266,7 +276,8 @@ export async function POST(request) {
       integrity = 'original-preserved';
       integrityNote = 'Original floor, walls, and view kept. Only the staged furniture was added.';
     } catch (err) {
-      console.warn('[nhance-me] staging integrity composite failed, returning raw staged image:', safeMessage(err.message, 'unknown error'));
+      const detail = err?.status ? `${err.status} ${safeMessage(err.message, 'unknown error')}` : safeMessage(err.message, 'unknown error');
+      console.warn('[nhance-me] staging integrity composite failed, returning raw staged image:', detail);
     }
 
     return Response.json({ stagedUrl: finalUrl, status: current.status, model: REPLICATE_MODEL, qualityMode: 'Premium MLS Luxury', integrity, integrityNote });
