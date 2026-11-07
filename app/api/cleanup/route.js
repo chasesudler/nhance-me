@@ -64,10 +64,12 @@ async function callReplicate(path, options = {}) {
 
 function buildPrompt() {
   return [
-    'Remove the visible light halos, glare, bloom and ghosting around the windows and light fixtures in this real estate interior photo.',
-    'Rebuild those bright areas as clean, natural light with smooth, even falloff and no glowing rings or smeared edges.',
-    'Keep everything else in the image exactly the same: identical room layout, architecture, furniture, objects, materials, colors, camera angle and framing.',
-    'Do not add, remove, move or restyle any object. Do not change the flooring, walls, windows, doors, trim or ceiling.',
+    'This real estate interior photo has a bright diagonal beam of light streaking across the ceiling from the round ceiling light toward the upper left. That beam is the defect. Remove that beam completely.',
+    'Repaint the ceiling as flat, even, matte ceiling tiles with uniform brightness. No beam, no streak, no glow trail, no bright diagonal band across the ceiling.',
+    'Also remove any visible light halos, glare, bloom and ghosting around the windows and light fixtures. Rebuild those bright areas as clean, natural light with no glowing rings or smeared edges.',
+    'Keep the round ceiling light fixture itself in place, but remove the beam of light coming out of it.',
+    'Keep everything else in the image the same: identical room layout, architecture, furniture, objects, materials, colors, camera angle and framing.',
+    'Do not add, remove, move or restyle any object. Do not change the flooring, walls, windows, doors or trim.',
     'Do not add people, text or watermarks.',
     'Photorealistic result that looks like one clean professional DSLR listing photo.',
   ].join(' ');
@@ -77,9 +79,11 @@ function buildModelInput(imageUrl) {
   const model = REPLICATE_MODEL.toLowerCase();
   const prompt = buildPrompt();
   if (model.includes('flux-kontext') || model.includes('flux-2')) {
-    // prompt_upsampling stays off: the cleanup instruction must stay literal
-    // so the model changes as little as possible beyond the light artifacts.
-    return { input_image: imageUrl, prompt, output_format: 'jpg', safety_tolerance: 2, prompt_upsampling: false };
+    // prompt_upsampling ON: the Nov 6 build left it off so the model would
+    // change as little as possible, and it returned a near copy of the input
+    // with the ceiling beam still in place. Cleanup must be allowed to
+    // repaint the ceiling, so let the model expand the instruction.
+    return { input_image: imageUrl, prompt, output_format: 'jpg', safety_tolerance: 2, prompt_upsampling: true };
   }
   return { image: imageUrl, input_image: imageUrl, prompt };
 }
