@@ -64,10 +64,9 @@ async function callReplicate(path, options = {}) {
 
 function buildPrompt() {
   return [
-    'This real estate interior photo has a bright diagonal beam of light streaking across the ceiling from the round ceiling light toward the upper left. That beam is the defect. Remove that beam completely.',
-    'Repaint the ceiling as flat, even, matte ceiling tiles with uniform brightness. No beam, no streak, no glow trail, no bright diagonal band across the ceiling.',
-    'Also remove any visible light halos, glare, bloom and ghosting around the windows and light fixtures. Rebuild those bright areas as clean, natural light with no glowing rings or smeared edges.',
-    'Keep the round ceiling light fixture itself in place, but remove the beam of light coming out of it.',
+    'This is a real estate interior photo. Remove only light artifacts: bright diagonal beams or streaks of light across the ceiling, halos, glare, bloom and ghosting around light fixtures and windows.',
+    'Keep every light fixture exactly as it is in the original photo. Recessed ceiling lights, ceiling fan lights, chandeliers, pendant lights, wall sconces and lamps are real fixtures, not defects. Do not remove, move, dim, cover or add any light fixture. The number and position of every light in the ceiling must stay the same.',
+    'Only clean the light artifact itself, the streak or glow on the ceiling surface between fixtures. Do not repaint the whole ceiling flat. Keep the ceiling texture, tile seams and fixtures unchanged.',
     'Keep everything else in the image the same: identical room layout, architecture, furniture, objects, materials, colors, camera angle and framing.',
     'Do not add, remove, move or restyle any object. Do not change the flooring, walls, windows, doors or trim.',
     'Do not add people, text or watermarks.',
